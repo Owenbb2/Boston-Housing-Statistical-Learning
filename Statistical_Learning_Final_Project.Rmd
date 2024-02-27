@@ -1,0 +1,477 @@
+---
+title: "Math 457 Project"
+author: "Dylan Wingfield, Owen Brown, Haoyu Fang"
+date: "2022-12-08"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+*Introduction*
+
+The dataset we have chosen to work with is BostonHousing in the mlbench package. BostonHousing consists of 506 observations of housing data acquired from the 1970 census. The response variable we are analyzing is medv, the median value of owner-occupied homes in USD 1000's. The 13 predictors include per capita crime rate by town (crim), nitric oxides concentration (nox), average number of rooms per dwelling (rm), and percentage of lower status of the population (lstat), among others. We have one categorical predictor, chas, a Charles River dummy variable, and the rest of our predictors are continuous. Our analysis of BostonHousing falls under supervised learning because we want to predict a response measurement, medv; and since our response is continuous, we will begin by performing linear regression with best subset variable selection, then explore penalized regression with ridge, lasso, and elastic net. Afterwards, we will segment our predictor space using tree-based methods, including regression trees, bagging, random forest and xgboosting. Finally, we will closely examine how the accuracy and complexity of each model compares to the rest.
+
+
+```{r}
+library(mlbench)
+data("BostonHousing")
+```
+
+```{r}
+fit1 = lm(medv~.,data = BostonHousing)
+summary(fit1)
+plot(fit1)
+```
+
+```{r}
+set.seed(123)
+random_order = sample(c(rep(TRUE,405),rep(FALSE,101)))
+train = BostonHousing[random_order,]
+test = BostonHousing[!random_order,]
+fit2 = lm(medv~.,data = train)
+summary(fit2)
+
+MSE1 = sqrt(mean((predict.lm(fit2, test) - test$medv)^2))
+MSE1
+```
+
+```{r}
+#choosing variables for OLS bestsubset
+
+library(leaps)
+best = regsubsets(medv~., data = BostonHousing, method = c("exhaustive"))
+summary(best)$which
+(size_ind = which.min(summary(best)$bic))
+(var_ind = colnames(BostonHousing)[summary(best)$which[size_ind,][-1]])
+
+```
+
+```{r}
+forward = regsubsets(medv~., data = BostonHousing, method = c("forward"))
+summary(forward)$which
+(size_ind = which.min(summary(forward)$bic))
+(var_ind = colnames(BostonHousing)[summary(forward)$which[size_ind,][-1]])
+```
+
+```{r}
+backward = regsubsets(medv~., data = BostonHousing, method = c("backward"))
+summary(backward)$which
+(size_ind = which.min(summary(backward)$bic))
+(var_ind = colnames(BostonHousing)[summary(backward)$which[size_ind,][-1]])
+```
+
+```{r}
+fit3 = lm(medv~zn+chas+nox+rm+dis+ptratio+b+lstat,data = train)
+summary(fit3)
+
+MSE6 = sqrt(mean((predict.lm(fit3, test) - test$medv)^2))
+MSE6
+```
+
+```{r}
+boston.res.lm <- resid(fit3)
+yhat.lm <- predict(fit3)
+plot(yhat.lm, boston.res.lm, ylab = "OLS Residuals", xlab = "Predicted medv", main = "Residuals vs predicted y for OLS")
+```
+Our first model we trained is the simple linear regression model, as well as using best subset selection in order to remove variables from the model. The best subset selection selected zn, chas1, nox, rm, dis, ptratio, b, and lstat as the varibles to use in the model.Our final model had a RMSE of 5.195209.
+
+
+
+```{r}
+#Ridge
+library(glmnet)
+set.seed(1)
+
+x = model.matrix(medv~., BostonHousing )[,-1]
+y = BostonHousing$medv
+
+ridge.mod <- glmnet(x, y, alpha = 0, nlambda = 100)
+ridge.mod$lambda[100]
+coef(ridge.mod)[, 100]
+
+sqrt(sum(coef(ridge.mod)[-1, 100]^2))
+```
+
+
+```{r}
+#Ridge
+
+set.seed(1)
+train <- sample(1:nrow(x), nrow(x) / 2) 
+test <- (-train)
+y.test <- y[test]
+
+cv.out <- cv.glmnet(x[train, ], y[train], alpha = 0) 
+plot(cv.out)
+bestlam <- cv.out$lambda.min
+bestlam
+
+ridge.pred <- predict(ridge.mod, s = bestlam, newx = x[test, ])
+
+sqrt(mean((ridge.pred - y.test)^2))
+
+med <- glmnet(x, y, alpha = 0)
+predict(med, type = "coefficients", s = bestlam)[1:13, ]
+
+```
+
+```{r}
+boston.res.ridge <- resid(med)
+plot(ridge.pred, boston.res.ridge, ylab = "Ridge Residuals", xlab = "Predicted medv", main = "Residuals vs predicted y for Ridge")
+
+```
+Here we used a ridge regression model. We used cross-validation in order to find the best lambda. The analysis found that the best lambda was 0.6546266. We used this lambda to predict. The RMSE/test error was 5.116954.
+
+\bc
+
+\newpage
+
+
+
+```{r}
+#Lasso
+
+lasso.mod <- glmnet(x[train, ], y[train], alpha = 1, nlambda = 100)
+plot(lasso.mod)
+
+```
+
+
+```{r}
+set.seed(1)
+cv.out <- cv.glmnet(x[train, ], y[train], alpha = 1)
+plot(cv.out)
+bestlamlasso <- cv.out$lambda.min
+bestlamlasso
+lasso.pred <- predict(lasso.mod, s = bestlamlasso,newx = x[test, ])
+sqrt(mean((lasso.pred - y.test)^2))
+```
+
+
+```{r}
+boston.res.lasso <- resid(lasso.mod)
+plot(lasso.pred, boston.res.lasso, ylab = "Lasso Residuals", xlab = "Predicted medv", main = "Residuals vs predicted y for Lasso")
+
+```
+The lasso model held similar results to the ridge regression. After Cross-Validation, the analysis found that the optimal lambda was 0.0141035. Here, the RMSE/test error is 5.182662. 
+
+
+\bc
+
+\newpage
+
+
+
+```{r}
+#Elastic Net
+net.mod <- glmnet(x[train, ], y[train], alpha = 0.5, nlambda = 100)
+plot(net.mod)
+
+```
+
+
+```{r}
+set.seed(1)
+cv.out.net <- cv.glmnet(x[train, ], y[train], alpha = 0.5)
+plot(cv.out)
+bestlamnet <- cv.out.net$lambda.min
+bestlamnet
+net.pred <- predict(net.mod, s = bestlamnet,newx = x[test, ])
+sqrt(mean((net.pred - y.test)^2))
+```
+
+
+```{r}
+boston.res.net <- resid(net.mod)
+plot(net.pred, boston.res.net, ylab = "Ridge Residuals", xlab = "Predicted medv", main = "Residuals vs predicted y for Elastic Net")
+
+```
+The Elastic Net held similar results to the lasso. The optimal lambda, after Cross-Validation, 0.02341795. After the prediction, the RMSE/test error was 5.181197.
+
+\bc
+
+\newpage
+
+
+```{r}
+#Regression trees
+library(tree)
+set.seed(2)
+tree.medv <- tree(medv~., BostonHousing, subset = train)
+summary(tree.medv)
+
+```
+
+```{r}
+library(tree)
+plot(tree.medv)
+text(tree.medv, pretty = 0)
+
+```
+
+
+
+```{r}
+library(tree)
+cv.boston <- cv.tree(tree.medv)
+plot(cv.boston$size, cv.boston$dev, type = "b")
+```
+
+
+
+```{r}
+library(tree)
+prune.boston <- prune.tree(tree.medv, best = 5)
+plot(prune.boston)
+text(prune.boston, pretty = 0)
+
+```
+
+
+```{r}
+library(tree)
+tree.pred <- predict(tree.medv, newdata = BostonHousing[-train, ])
+boston.test <- BostonHousing[-train, "medv"]
+plot(tree.pred, boston.test)
+abline(0, 1)
+sqrt(mean((tree.pred - boston.test)^2))
+
+```
+
+```{r}
+library(tree)
+boston.res.tree <- resid(prune.boston)
+plot(tree.pred, boston.res.tree, ylab = "Regression Trees Residuals", xlab = "Predicted medv", main = "Residuals vs predicted y for Regression Trees")
+
+```
+We can see from the regression tree, that the number of rooms has the most significance as it is the first branch. The number of rooms also appear in the 3rd branch on the LHS and on the 2nd branch on the RHS. This emphasizes the importance of number of rooms. After the pruning of the tree, the RMSE/test error is 5.940276. 
+
+\bc
+
+\newpage
+
+
+
+
+
+```{r}
+#Bagging
+
+library(randomForest)
+set.seed(129)
+bag.boston <- randomForest(medv~., data = BostonHousing,subset = train, mtry = 13, importance = TRUE)
+bag.boston
+
+```
+
+```{r}
+yhat.bag <- predict(bag.boston, newdata = BostonHousing[-train, ])
+plot(yhat.bag, boston.test)
+abline(0, 1)
+sqrt(mean((yhat.bag - boston.test)^2))
+
+```
+
+
+
+```{r}
+boston.res.bag <- resid(bag.boston)
+plot(yhat.bag, boston.res.bag, ylab = "Bagging Residuals", xlab = "Predicted medv", main = "Residuals vs predicted y for Bagging")
+
+```
+
+The number of trees we chose to use for this bagging model was 500 trees. We can also see from the graph that the test data is postiviely correlated with the predicted values using the bagging model. The RMSE/test error here is 4.843261.
+
+\bc
+
+\newpage
+
+```{r}
+#Random Forest
+
+set.seed(129)
+rf.boston <- randomForest(medv~., data = BostonHousing, subset = train, mtry = 6, importance = TRUE)
+yhat.rf <- predict(rf.boston, newdata = BostonHousing[-train, ])
+sqrt(mean((yhat.rf - boston.test)^2))
+importance(rf.boston)
+varImpPlot(rf.boston)
+```
+
+```{r}
+boston.res.rf <- resid(rf.boston)
+plot(yhat.rf, boston.res.rf, ylab = "Random Forest Residuals", xlab = "Predicted medv", main = "Residuals vs predicted y for Random Forest")
+
+```
+Using the random forest model, the analysis showed that the number of rooms has the most importance in the model; indicated by the table. The RMSE/test error is 4.431934 for this model. 
+
+
+\bc
+
+\newpage
+
+
+```{r}
+#Boosting
+ library(gbm)
+set.seed(234)
+Boston.boost=gbm(medv ~ . ,data = BostonHousing[train,],distribution = "gaussian",n.trees = 10000, shrinkage = 0.01, interaction.depth = 4)
+Boston.boost
+summary(Boston.boost) #Summary gives a table of Variable Importance and a plot of Variable Importance
+gbm(formula = medv~., distribution = "gaussian", data = BostonHousing[-train, ], n.trees = 10000, interaction.depth = 4, shrinkage = 0.01)
+```
+
+
+
+```{r}
+plot(Boston.boost, i = "rm")
+plot(Boston.boost, i = "lstat")
+
+```
+
+
+```{r}
+n.trees = seq(from=100 ,to=10000, by=100) #no of trees-a vector of 100 values 
+#Generating a Prediction matrix for each Tree
+predmatrix<-predict(Boston.boost,BostonHousing[-train,],n.trees = n.trees)
+dim(predmatrix) #dimentions of the Prediction Matrix
+#Calculating The Mean squared Test Error
+test.error<-with(BostonHousing[-train,],apply( (predmatrix-medv)^2,2,mean))
+head(test.error) #contains the Mean squared test error for each of the 100 trees averaged
+#Plotting the test error vs number of trees
+plot(n.trees , test.error , pch=19,col="blue",xlab="Number of Trees",ylab="Test Error", main = "Perfomance of Boosting on Test Set")
+dim(predmatrix)
+head(test.error)
+which.min(test.error)
+sqrt(test.error[which.min(test.error)])
+
+```
+
+```{r}
+boston.boost.cv <- gbm(medv~., data = BostonHousing[train,], distribution = "gaussian", n.trees=10000, interaction.depth=4, shrinkage = 0.1, verbose=F, cv.folds=10)
+
+#find the best prediction
+bestTreeForPrediction <- gbm.perf(boston.boost.cv)
+yhat.boost = predict(boston.boost.cv, newdata = BostonHousing[-train,],n.trees = bestTreeForPrediction)
+sqrt((mean((yhat.boost-boston.test)^2)))
+```
+
+```{r}
+boston.res.boost <- resid(Boston.boost)
+plot(yhat.boost, boston.res.boost, ylab = "Boosting Residuals", xlab = "Predicted medv", main = "Residuals vs predicted y for Boosting")
+```
+
+The boosting model showed us once again that the number of rooms has the most importance in the model. The graph showed us that the error after around 3000 trees levels out.The analysis found that the optimal number of trees was 5500, with an RMSE/test error of 4.259665. The best prediction, however had an RMSE/test error of 4.335797.
+
+\bc
+
+\newpage
+
+```{r}
+#XGboost
+library(xgboost)
+train.boston <- BostonHousing[train,-4]
+test.boston <- BostonHousing[-train,-4]
+
+dtrain <- xgb.DMatrix(data = as.matrix(train.boston[!names(train.boston) %in% c("medv")]), label = train.boston$medv)
+
+boston.xgb = xgboost(data=dtrain, max_depth=3, eta = 0.2, nthread=3, nrounds=40, lambda=0
+, objective="reg:linear")
+```
+
+```{r}
+dtest <- as.matrix(test.boston[!names(train.boston) %in% c("medv")])
+yhat.xgb <- predict(boston.xgb,dtest)
+sqrt(mean((yhat.xgb - boston.test)^2))
+```
+
+```{r}
+set.seed(42)
+param <- list("max_depth" = 3, "eta" = 0.2, "objective" = "reg:linear", "lambda" = 0)
+cv.nround <- 500
+cv.nfold <- 3
+boston.xgb.cv <- xgb.cv(param=param, data = dtrain, nfold = cv.nfold, nrounds=cv.nround,
+                        early_stopping_rounds = 200, verbose=0)
+
+```
+
+```{r}
+dtrain <- xgb.DMatrix(data = as.matrix(train.boston[!names(train.boston) %in% c("medv")]), label = train.boston$medv)
+boston.xgb = xgboost(param=param, data=dtrain, nthread=3, nrounds=boston.xgb.cv$best_iteration, verbose=0)
+```
+
+```{r}
+dtest <- as.matrix(test.boston[!names(train.boston) %in% c("medv")])
+yhat.xgb <- predict(boston.xgb,dtest)
+sqrt(mean((yhat.xgb - boston.test)^2))
+
+```
+
+
+```{r}
+importance <- xgb.importance(colnames(train.boston[!names(train.boston) %in% c("medv")]),model=boston.xgb)
+importance
+
+```
+
+```{r}
+xgb.plot.importance(importance, rel_to_first=TRUE, xlab="Relative Importance")
+
+```
+
+```{r}
+library(ggplot2)
+library(caret)
+ntrees <- boston.xgb.cv$best_iteration
+param_grid <- expand.grid(
+  nrounds = ntrees,
+  eta = seq(2,24,2)/ntrees,
+  subsample = 1.0,
+  colsample_bytree = 1.0,
+  max_depth = c(1,2,3,4,5,6),
+  gamma = 1,
+  min_child_weight = 1
+)
+
+xgb_control <- trainControl(
+  method="cv",
+  number = 5
+)
+set.seed(42)
+boston.xgb.tuned <- train(medv~., data=train.boston, trControl=xgb_control, tuneGrid=param_grid,lambda=0, method="xgbTree")
+
+boston.xgb.tuned$bestTune
+
+plot(boston.xgb.tuned)
+```
+```{r}
+yhat.xgb.tuned <- predict(boston.xgb.tuned$finalModel,newdata=dtest)
+sqrt(mean((yhat.xgb.tuned - boston.test)^2))
+
+```
+
+```{r}
+boston.res.xgb <- resid(boston.xgb)
+plot(yhat.xgb.tuned, boston.res.xgb , ylab = "XGBoost Residuals", xlab = "Predicted medv", main = "Residuals vs predicted y for XGBoost")
+
+
+
+```
+
+Using Cross-Validation on the XGBoost we found the the optimal max tree depth was 2.This, once again, showed us that the number of rooms is the most importatn variable in the model. Using this parameter as well as the other optimal parameters, the model obtained an RMSE/test error of 4.057732. The other tree depths obtained had a worse RMSE, however these models, with a higher tree depth can be too complex, and so 2 is the best depth. 
+
+\bc
+
+\newpage
+
+*Conclusion*
+
+From thorough analysis of the models we tested, we have determined that the XGBoost model is the most accurate for predicting the median house value in Boston. We also concluded that the number of rooms per household(rm) was the most influential and important predictor in our models and the proportion of residential land zoned for lots over 25000 square ft(zn) was the least imporatant predictor. This was a common theme throughout all our models. We can see that in all the residual vs predicated y(medv) graphs that the points are random, which indicates that the residuals are random. Therefore, our models do not have a patterns.
+
+
+
+
+
